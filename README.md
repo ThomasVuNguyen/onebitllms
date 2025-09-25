@@ -29,7 +29,7 @@ pip install onebitllms
 or directly from source:
 
 ```bash
-pip install git+https://github.com/tiiuae/onebitllms.git
+pip install git+https://github.com/ThomasVuNguyen/onebitllms.git
 ```
 
 ## Getting started
