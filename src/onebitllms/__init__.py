@@ -12,7 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from .kernels import activation_quant_triton, weight_quant_triton
-from .layers import BitNetLinear
-from .utils import replace_linear_with_bitnet_linear, quantize_to_1bit, convert_to_bf16
+from .layers import BitNetLinear, Pure1BitLinear
+from .utils import (
+    replace_linear_with_bitnet_linear,
+    replace_linear_with_pure1bit_linear,
+    quantize_to_1bit,
+    convert_to_bf16,
+    Pure1BitTrainingHelper,
+    create_pure1bit_optimizer,
+    pure1bit_training_step
+)
+from .optimizers import Pure1BitOptimizer
 
 __version__ = "0.0.4.dev0"

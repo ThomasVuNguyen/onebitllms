@@ -16,7 +16,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from onebitllms.layers import BitNetLinear
+from onebitllms.layers import BitNetLinear, Pure1BitLinear
+from transformers.pytorch_utils import Conv1D
 
 def replace_linear_with_bitnet_linear(model, previous_dtype: Optional[torch.dtype] = None):
     """
@@ -49,6 +50,61 @@ def replace_linear_with_bitnet_linear(model, previous_dtype: Optional[torch.dtyp
                     if bias:
                         new_layer.bias.copy_(module.bias)
             
+            # Replace the layer in the model
+            setattr(model, name, new_layer)
+    return model
+
+
+def replace_linear_with_pure1bit_linear(model, previous_dtype: Optional[torch.dtype] = None):
+    """
+    Replace all nn.Linear layers in a model with Pure1BitLinear layers
+    that store weights as discrete {-1, 0, 1} values without full-precision shadows.
+    """
+    # Recursively replace linear layers
+    if previous_dtype is None:
+        previous_dtype = torch.get_default_dtype()
+
+        # Try to get model dtype, fallback to default if not available
+        try:
+            model_dtype = model.dtype
+        except AttributeError:
+            # If model doesn't have dtype, infer from first parameter
+            model_dtype = next(model.parameters()).dtype if list(model.parameters()) else torch.float32
+
+        torch.set_default_dtype(model_dtype)
+        previous_dtype = model_dtype
+
+    for name, module in model.named_children():
+        if len(list(module.children())) > 0:
+            replace_linear_with_pure1bit_linear(module, previous_dtype=previous_dtype)
+
+        # Replace nn.Linear and Conv1D layers, but skip 'lm_head'
+        if name != 'lm_head' and (isinstance(module, nn.Linear) or isinstance(module, Conv1D)):
+            if isinstance(module, nn.Linear):
+                in_features = module.in_features
+                out_features = module.out_features
+                weight = module.weight
+            else:  # Conv1D
+                # Conv1D has shape (in_features, out_features) but we need (out_features, in_features)
+                in_features = module.weight.shape[0]
+                out_features = module.weight.shape[1]
+                weight = module.weight.T  # Transpose for Pure1BitLinear compatibility
+
+            bias = module.bias is not None
+
+            with torch.device(weight.device):
+                # Create a new instance of the pure 1-bit linear layer
+                new_layer = Pure1BitLinear(in_features, out_features, bias=bias)
+
+                # Initialize 1-bit weights from existing weights
+                with torch.no_grad():
+                    # Convert full-precision weights to {-1, 0, 1} directly
+                    quantized_weights = torch.sign(weight).clamp(-1, 1)
+                    new_layer.weight.copy_(quantized_weights.to(torch.int8))
+
+                    if bias:
+                        new_layer.bias.copy_(module.bias)
+
             # Replace the layer in the model
             setattr(model, name, new_layer)
     return model
