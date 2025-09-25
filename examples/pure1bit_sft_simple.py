@@ -224,17 +224,18 @@ def main():
             else:
                 raise ValueError("Could not find text data in dataset")
 
-        # Tokenize
+        # Tokenize - padding=False is correct, we'll pad later in the collator
         tokenized = tokenizer(
             texts,
             truncation=True,
-            padding=False,
+            padding=False,  # Don't pad here, let the collator handle it
             max_length=args.max_length,
             return_special_tokens_mask=False,
         )
 
         # For causal LM, labels are the same as input_ids
-        tokenized["labels"] = tokenized["input_ids"].copy()
+        # Make sure labels is a copy, not a reference
+        tokenized["labels"] = [ids.copy() if isinstance(ids, list) else ids for ids in tokenized["input_ids"]]
         return tokenized
 
     print("🔄 Preprocessing dataset...")
@@ -257,12 +258,33 @@ def main():
         print(f"❌ Error preprocessing dataset: {e}")
         return
 
-    # Data collator
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,
-        pad_to_multiple_of=8
-    )
+    # Simple custom data collator that handles variable lengths properly
+    def collate_fn(batch):
+        # Find max length in this batch
+        max_len = max(len(item["input_ids"]) for item in batch)
+
+        input_ids_batch = []
+        labels_batch = []
+
+        for item in batch:
+            input_ids = item["input_ids"]
+            labels = item["labels"]
+
+            # Pad to max length
+            pad_length = max_len - len(input_ids)
+            if pad_length > 0:
+                input_ids = input_ids + [tokenizer.pad_token_id] * pad_length
+                labels = labels + [-100] * pad_length  # -100 is ignored in loss computation
+
+            input_ids_batch.append(input_ids)
+            labels_batch.append(labels)
+
+        return {
+            "input_ids": torch.tensor(input_ids_batch, dtype=torch.long),
+            "labels": torch.tensor(labels_batch, dtype=torch.long)
+        }
+
+    data_collator = collate_fn
 
     ################
     # Training Setup
@@ -282,7 +304,8 @@ def main():
         batch_size=args.per_device_train_batch_size,
         shuffle=True,
         collate_fn=data_collator,
-        drop_last=True
+        drop_last=True,
+        pin_memory=False  # Disable pin_memory to avoid potential issues
     )
 
     if eval_dataset:
@@ -439,12 +462,18 @@ def save_checkpoint(model, tokenizer, output_dir, step):
     # Save tokenizer
     tokenizer.save_pretrained(checkpoint_dir)
 
-    # Save model state dict (custom saving for pure 1-bit weights)
-    model_state = {}
-    for name, param in model.named_parameters():
-        model_state[name] = param.data.clone()
-
-    torch.save(model_state, checkpoint_dir / "pytorch_model.bin")
+    # Save model with safetensors format (safer and more compatible)
+    try:
+        model.save_pretrained(checkpoint_dir, safe_serialization=True)
+        print(f"✅ Saved model with safetensors format")
+    except Exception as e:
+        print(f"⚠️  Safetensors save failed: {e}")
+        # Fallback to pytorch format
+        model_state = {}
+        for name, param in model.named_parameters():
+            model_state[name] = param.data.clone()
+        torch.save(model_state, checkpoint_dir / "pytorch_model.bin")
+        print(f"✅ Saved model with pytorch format (fallback)")
 
     # Save config
     model.config.save_pretrained(checkpoint_dir)
