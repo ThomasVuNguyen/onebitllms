@@ -62,6 +62,7 @@ def main():
 
     # Training arguments
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory")
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "gpu"], help="Device to use (auto/cpu/gpu)")
     parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate")
     parser.add_argument("--per_device_train_batch_size", type=int, default=1, help="Batch size")
     parser.add_argument("--per_device_eval_batch_size", type=int, default=1, help="Eval batch size")
@@ -87,8 +88,24 @@ def main():
     else:
         torch_dtype = torch.float32
 
-    # Detect device capabilities
-    if not torch.cuda.is_available() and torch_dtype == torch.bfloat16:
+    # Determine device based on args and availability
+    if args.device == "auto":
+        use_gpu = torch.cuda.is_available()
+        device_name = "CUDA (auto)" if use_gpu else "CPU (auto)"
+    elif args.device == "gpu":
+        if not torch.cuda.is_available():
+            print("❌ GPU requested but CUDA not available, falling back to CPU")
+            use_gpu = False
+            device_name = "CPU (GPU unavailable)"
+        else:
+            use_gpu = True
+            device_name = "CUDA (forced)"
+    else:  # args.device == "cpu"
+        use_gpu = False
+        device_name = "CPU (forced)"
+
+    # Adjust dtype based on device
+    if not use_gpu and torch_dtype == torch.bfloat16:
         print("⚠️  bf16 not supported on CPU, falling back to float32")
         torch_dtype = torch.float32
 
@@ -96,7 +113,7 @@ def main():
     print(f"Model: {args.model_name_or_path}")
     print(f"Dataset: {args.dataset_name}")
     print(f"Output: {args.output_dir}")
-    print(f"Device: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
+    print(f"Device: {device_name}")
     print(f"Dtype: {torch_dtype}")
 
     ################
@@ -106,7 +123,7 @@ def main():
         revision=args.model_revision,
         trust_remote_code=args.trust_remote_code,
         torch_dtype=torch_dtype,
-        device_map="auto" if torch.cuda.is_available() else None,
+        device_map="auto" if use_gpu else None,
     )
 
     # Use the instruct tokenizer for fine-tuning if available
