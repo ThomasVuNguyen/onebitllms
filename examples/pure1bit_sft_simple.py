@@ -341,10 +341,15 @@ def main():
 
         for step, batch in enumerate(progress_bar):
             try:
+                # Move batch to same device as model
+                device = next(model.parameters()).device
+                input_ids = batch["input_ids"].to(device)
+                labels = batch["labels"].to(device)
+
                 # Training step with pure 1-bit
                 loss = pure1bit_training_step(
                     model, optimizer, training_helper,
-                    loss_fn, batch["input_ids"], batch["labels"],
+                    loss_fn, input_ids, labels,
                     lr=args.learning_rate
                 )
 
